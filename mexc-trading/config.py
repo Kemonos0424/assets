@@ -31,11 +31,20 @@ class Config:
     ORDER_TYPE: str = os.getenv("ORDER_TYPE", "maker")  # "maker" or "taker"
     ORDER_EXPIRY_SECONDS: int = int(os.getenv("ORDER_EXPIRY_SECONDS", "30"))
 
+    # Dry-run mode (no real orders)
+    DRY_RUN: bool = os.getenv("DRY_RUN", "true").lower() in ("true", "1", "yes")
+
+    # Telegram notifications (optional)
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
+
     # Trading pair
     SYMBOL: str = "USDC_USDT"
 
     @classmethod
     def validate(cls) -> bool:
+        if cls.DRY_RUN:
+            return True
         if not cls.API_KEY or not cls.SECRET_KEY:
             raise ValueError(
                 "MEXC_API_KEY and MEXC_SECRET_KEY must be set in .env file"
