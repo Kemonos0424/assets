@@ -47,9 +47,9 @@ class RiskManager:
             logger.warning("Daily trade limit reached: %d", self.max_daily_trades)
             return False
 
-        if abs(self.daily_pnl) >= self.daily_loss_limit:
+        if self.daily_pnl <= -self.daily_loss_limit:
             logger.warning(
-                "Daily loss limit reached: %.2f / %.2f",
+                "Daily loss limit reached: %.2f / -%.2f",
                 self.daily_pnl,
                 self.daily_loss_limit,
             )
