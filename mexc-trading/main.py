@@ -26,6 +26,7 @@ from mexc_client import MEXCFuturesClient
 from strategies.usdc_usdt_arb import USDCUSDTStrategy
 from utils.risk_manager import RiskManager
 from utils.notifier import Notifier
+from utils.health_check import HealthChecker
 
 # Configure logging
 logging.basicConfig(
@@ -224,6 +225,10 @@ def main():
         "order_type": Config.ORDER_TYPE,
     })
 
+    # Initialize health checker
+    init_balance = 1000.0 if Config.DRY_RUN else strategy.get_account_balance()
+    health = HealthChecker(strategy, notifier, init_balance)
+
     logger.info("Bot started. Press Ctrl+C to stop.")
     last_daily_reset = time.strftime("%Y-%m-%d")
     consecutive_errors = 0
@@ -244,8 +249,26 @@ def main():
                 last_daily_reset = today
 
             # Execute strategy tick
+            old_trade_count = strategy.risk.trade_count
             strategy.tick()
             consecutive_errors = 0
+
+            # Record price for health monitoring
+            price = strategy.get_current_price()
+            if price:
+                health.record_price(price)
+
+            # Record trade if one completed
+            if strategy.risk.trade_count > old_trade_count:
+                recent_pnl = strategy.risk.daily_pnl
+                health.record_trade(recent_pnl)
+
+            # Run periodic health check (every 60s)
+            if health.should_check():
+                status = health.run_check()
+                logger.info("[HEALTH] %s", health.get_summary())
+                if not status.is_healthy:
+                    logger.error("[HEALTH] Bot is UNHEALTHY - consider stopping")
 
             # Periodic sim status (dry-run, every 10 trades)
             if Config.DRY_RUN and isinstance(strategy, DryRunStrategy):
