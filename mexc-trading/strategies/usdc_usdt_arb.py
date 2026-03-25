@@ -2,7 +2,7 @@
 USDC/USDT Futures Arbitrage Strategy - Limit Order (Maker) Mode.
 
 Uses post-only limit orders for 0% maker fee and zero slippage.
-With 200x leverage on USDC/USDT stablecoin pair, small deviations
+With leverage on USDC/USDT stablecoin pair, small deviations
 from the 1.0 peg generate significant leveraged returns.
 
 Order flow:
@@ -16,7 +16,6 @@ import logging
 import time
 from dataclasses import dataclass
 
-from mexc_client import MEXCFuturesClient
 from config import Config
 from utils.risk_manager import RiskManager
 
@@ -48,9 +47,10 @@ class USDCUSDTStrategy:
 
     FAIR_VALUE = 1.0000
 
-    def __init__(self, client: MEXCFuturesClient, risk_manager: RiskManager):
+    def __init__(self, client, risk_manager: RiskManager, notifier=None):
         self.client = client
         self.risk = risk_manager
+        self.notifier = notifier
         self.symbol = Config.SYMBOL
         self.leverage = Config.LEVERAGE
         self.threshold = Config.PRICE_DEVIATION_THRESHOLD
@@ -59,6 +59,11 @@ class USDCUSDTStrategy:
         self.current_position: Position | None = None
         self.pending_order: PendingOrder | None = None
         self._setup_leverage()
+
+    def _notify(self, method: str, *args, **kwargs) -> None:
+        """Send notification if notifier is configured."""
+        if self.notifier and hasattr(self.notifier, method):
+            getattr(self.notifier, method)(*args, **kwargs)
 
     def _setup_leverage(self) -> None:
         """Configure leverage on the exchange."""
@@ -165,27 +170,29 @@ class USDCUSDTStrategy:
             # State: 2=filled, 3=partially filled, 4=cancelled, 5=partially cancelled
             if state == 2:
                 # Fully filled
+                fill_price = float(data.get("dealAvg", order.price)) if data.get("dealAvg") else order.price
                 logger.info("Order %s FILLED: %s @ %.6f",
-                            order.order_id, order.side, order.price)
+                            order.order_id, order.side, fill_price)
 
                 if order.is_close:
                     # Close order filled - record PnL
                     if self.current_position:
                         pos = self.current_position
                         if pos.side == "long":
-                            pnl = (order.price - pos.entry_price) * pos.quantity * self.leverage
+                            pnl = (fill_price - pos.entry_price) * pos.quantity * self.leverage
                         else:
-                            pnl = (pos.entry_price - order.price) * pos.quantity * self.leverage
+                            pnl = (pos.entry_price - fill_price) * pos.quantity * self.leverage
                         self.risk.record_trade(pnl)
                         logger.info("Position closed. PnL: %.4f USDT", pnl)
+                        self._notify("notify_exit", pos.side, pos.entry_price, fill_price, pnl)
                     self.current_position = None
                 else:
                     # Entry order filled - create position
-                    stop_loss = self.risk.calculate_stop_loss(order.price, order.side)
-                    take_profit = self.risk.calculate_take_profit(order.price, order.side)
+                    stop_loss = self.risk.calculate_stop_loss(fill_price, order.side)
+                    take_profit = self.risk.calculate_take_profit(fill_price, order.side)
                     self.current_position = Position(
                         side=order.side,
-                        entry_price=order.price,
+                        entry_price=fill_price,
                         quantity=order.quantity,
                         stop_loss=stop_loss,
                         take_profit=take_profit,
@@ -193,8 +200,9 @@ class USDCUSDTStrategy:
                     )
                     logger.info(
                         "Position opened: %s %.4f @ %.6f, SL=%.6f, TP=%.6f",
-                        order.side, order.quantity, order.price, stop_loss, take_profit,
+                        order.side, order.quantity, fill_price, stop_loss, take_profit,
                     )
+                    self._notify("notify_entry", order.side, order.quantity, fill_price, "limit (maker)")
 
                 self.pending_order = None
                 return True
@@ -246,15 +254,15 @@ class USDCUSDTStrategy:
             return False
 
         # For post-only: place at current price to sit on the book
-        # Long: place at bid (or slightly below ask)
-        # Short: place at ask (or slightly above bid)
+        # Long: place at bid = maker
+        # Short: place at ask = maker
         bid_ask = self.get_best_bid_ask()
         if bid_ask:
             best_bid, best_ask = bid_ask
             if signal == "long":
-                limit_price = best_bid  # Buy at bid = maker
+                limit_price = best_bid
             else:
-                limit_price = best_ask  # Sell at ask = maker
+                limit_price = best_ask
         else:
             limit_price = price
 
@@ -300,11 +308,9 @@ class USDCUSDTStrategy:
         if bid_ask:
             best_bid, best_ask = bid_ask
             if pos.side == "long":
-                # Sell at ask = maker
-                close_price = best_ask
+                close_price = best_ask  # Sell at ask = maker
             else:
-                # Buy at bid = maker
-                close_price = best_bid
+                close_price = best_bid  # Buy at bid = maker
         else:
             close_price = self.FAIR_VALUE
 
@@ -367,6 +373,7 @@ class USDCUSDTStrategy:
                     pnl = (pos.entry_price - price) * pos.quantity * self.leverage
                 self.risk.record_trade(pnl)
                 logger.warning("Emergency close executed. PnL: %.4f USDT", pnl)
+                self._notify("notify_stop_loss", pos.side, price, pnl)
                 self.current_position = None
                 return True
             else:

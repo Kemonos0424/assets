@@ -134,31 +134,44 @@ class DryRunStrategy(USDCUSDTStrategy):
     """Strategy wrapper that tracks simulated PnL in dry-run mode."""
 
     def __init__(self, client, risk_manager, notifier):
-        super().__init__(client, risk_manager)
-        self.notifier = notifier
+        super().__init__(client, risk_manager, notifier)
         self.sim_balance = 1000.0
         self.sim_trades = 0
         self.sim_pnl = 0.0
 
-    def _place_entry_order(self, signal, price):
-        result = super()._place_entry_order(signal, price)
-        if result:
-            self.notifier.notify_entry(signal, self.trade_amount / price, price, "limit (dry-run)")
+    def _on_trade_closed(self, pnl: float) -> None:
+        """Update sim tracking when any trade closes."""
+        self.sim_pnl += pnl
+        self.sim_trades += 1
+        self.sim_balance += pnl
+        logger.info("[SIM] Trade PnL: %.4f, Total: %.4f, Balance: %.2f",
+                     pnl, self.sim_pnl, self.sim_balance)
+
+    def _check_pending_order(self) -> bool:
+        """Override to track sim balance on close fills."""
+        old_position = self.current_position
+        result = super()._check_pending_order()
+
+        # Detect if a close order just filled (position was cleared)
+        if old_position is not None and self.current_position is None and self.pending_order is None:
+            # PnL was already recorded by parent via risk.record_trade
+            # Calculate it again for sim tracking
+            last_pnl = self.risk.daily_pnl - (self.sim_pnl if self.sim_trades > 0 else 0)
+            # Simpler: use the last recorded PnL from risk manager
+            recent_pnl = self.risk.daily_pnl - (self.sim_pnl)
+            self.sim_pnl = self.risk.daily_pnl
+            self.sim_balance = 1000.0 + self.risk.daily_pnl
+            self.sim_trades = self.risk.trade_count
+
         return result
 
     def _emergency_close(self, price):
-        if self.current_position:
-            pos = self.current_position
-            if pos.side == "long":
-                pnl = (price - pos.entry_price) * pos.quantity * self.leverage
-            else:
-                pnl = (pos.entry_price - price) * pos.quantity * self.leverage
-            self.sim_pnl += pnl
-            self.sim_trades += 1
-            self.sim_balance += pnl
-            self.notifier.notify_stop_loss(pos.side, price, pnl)
-            logger.info("[DRY-RUN] SIM P&L: %.4f, Balance: %.2f", pnl, self.sim_balance)
-        return super()._emergency_close(price)
+        result = super()._emergency_close(price)
+        if result:
+            self.sim_pnl = self.risk.daily_pnl
+            self.sim_balance = 1000.0 + self.risk.daily_pnl
+            self.sim_trades = self.risk.trade_count
+        return result
 
 
 def main():
@@ -196,16 +209,11 @@ def main():
         logger.info("*** Real MEXC price data is used for simulation ***")
         logger.info("*** Set DRY_RUN=false in .env for live trading  ***")
         client = DryRunClient()
+        strategy = DryRunStrategy(client, RiskManager(), notifier)
     else:
         logger.warning("*** LIVE TRADING MODE - Real money at risk ***")
         client = MEXCFuturesClient()
-
-    risk_manager = RiskManager()
-
-    if Config.DRY_RUN:
-        strategy = DryRunStrategy(client, risk_manager, notifier)
-    else:
-        strategy = USDCUSDTStrategy(client, risk_manager)
+        strategy = USDCUSDTStrategy(client, RiskManager(), notifier)
 
     strategy.check_existing_positions()
 
@@ -226,23 +234,20 @@ def main():
             # Daily reset
             today = time.strftime("%Y-%m-%d")
             if today != last_daily_reset:
-                balance = 0.0
                 if Config.DRY_RUN and isinstance(strategy, DryRunStrategy):
                     balance = strategy.sim_balance
-                    notifier.notify_daily_report(
-                        risk_manager.daily_pnl, risk_manager.trade_count, balance)
                 else:
                     balance = strategy.get_account_balance()
-                    notifier.notify_daily_report(
-                        risk_manager.daily_pnl, risk_manager.trade_count, balance)
-                risk_manager.reset_daily()
+                notifier.notify_daily_report(
+                    strategy.risk.daily_pnl, strategy.risk.trade_count, balance)
+                strategy.risk.reset_daily()
                 last_daily_reset = today
 
             # Execute strategy tick
             strategy.tick()
             consecutive_errors = 0
 
-            # Sim status (dry-run only, every 60 ticks)
+            # Periodic sim status (dry-run, every 10 trades)
             if Config.DRY_RUN and isinstance(strategy, DryRunStrategy):
                 if strategy.sim_trades > 0 and strategy.sim_trades % 10 == 0:
                     logger.info(

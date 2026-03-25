@@ -17,19 +17,40 @@ class RiskManager:
         self.daily_loss_limit = self.max_position_size * 0.1  # 10% of max position
         self.daily_pnl = 0.0
         self.trade_count = 0
-        self.max_daily_trades = 100
+        self.max_daily_trades = 5000  # ~5s interval * 5000 = ~7 hours of continuous trading
 
     def calculate_stop_loss(self, entry_price: float, side: str) -> float:
-        """Calculate stop-loss price based on entry and side."""
+        """
+        Calculate stop-loss price.
+
+        For stablecoin pairs with high leverage, the stop-loss needs to be
+        wider than the typical tick size to avoid false triggers.
+        At 200x leverage, a 0.05% price move = 10% account move.
+        We use a fixed absolute distance instead of leverage-adjusted percentage
+        to ensure it's wider than normal market noise.
+        """
+        # Minimum SL distance: 0.05% of price (~5 ticks on USDC/USDT)
+        min_sl_distance = entry_price * 0.0005
+        # Leverage-adjusted SL
+        leverage_sl_distance = entry_price * self.stop_loss_pct / self.leverage
+
+        # Use the WIDER of the two to avoid premature triggers
+        sl_distance = max(min_sl_distance, leverage_sl_distance)
+
         if side == "long":
-            return entry_price * (1 - self.stop_loss_pct / self.leverage)
-        return entry_price * (1 + self.stop_loss_pct / self.leverage)
+            return entry_price - sl_distance
+        return entry_price + sl_distance
 
     def calculate_take_profit(self, entry_price: float, side: str) -> float:
-        """Calculate take-profit price based on entry and side."""
+        """Calculate take-profit price."""
+        # Minimum TP distance: 0.03% of price (~3 ticks)
+        min_tp_distance = entry_price * 0.0003
+        leverage_tp_distance = entry_price * self.take_profit_pct / self.leverage
+        tp_distance = max(min_tp_distance, leverage_tp_distance)
+
         if side == "long":
-            return entry_price * (1 + self.take_profit_pct / self.leverage)
-        return entry_price * (1 - self.take_profit_pct / self.leverage)
+            return entry_price + tp_distance
+        return entry_price - tp_distance
 
     def calculate_position_size(
         self, balance: float, price: float, leverage: int

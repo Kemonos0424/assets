@@ -1,10 +1,10 @@
 """MEXC Futures API client with HMAC-SHA256 authentication."""
 import hashlib
 import hmac
+import json
 import time
 import logging
 from typing import Any
-from urllib.parse import urlencode
 
 import requests
 
@@ -26,9 +26,9 @@ class MEXCFuturesClient:
             "ApiKey": self.api_key,
         })
 
-    def _sign(self, timestamp: str, params: str = "") -> str:
+    def _sign(self, timestamp: str, params_str: str = "") -> str:
         """Generate HMAC-SHA256 signature."""
-        sign_str = self.api_key + timestamp + params
+        sign_str = self.api_key + timestamp + params_str
         return hmac.new(
             self.secret_key.encode("utf-8"),
             sign_str.encode("utf-8"),
@@ -36,7 +36,7 @@ class MEXCFuturesClient:
         ).hexdigest()
 
     def _request(
-        self, method: str, path: str, params: dict | None = None, signed: bool = False
+        self, method: str, path: str, params: dict | list | None = None, signed: bool = False
     ) -> dict[str, Any]:
         """Make an API request."""
         url = f"{self.base_url}{path}"
@@ -44,9 +44,15 @@ class MEXCFuturesClient:
 
         headers = {}
         if signed:
-            param_str = urlencode(params) if params else ""
+            # BUG FIX: POST uses JSON body string, GET uses query string
+            if method == "POST" and params is not None:
+                params_str = json.dumps(params, separators=(",", ":"))
+            elif method == "GET" and params:
+                params_str = "&".join(f"{k}={v}" for k, v in params.items())
+            else:
+                params_str = ""
             headers["Request-Time"] = timestamp
-            headers["Signature"] = self._sign(timestamp, param_str)
+            headers["Signature"] = self._sign(timestamp, params_str)
 
         try:
             if method == "GET":
@@ -67,7 +73,7 @@ class MEXCFuturesClient:
 
             return data
         except requests.RequestException as e:
-            logger.error("Request failed: %s", e)
+            logger.error("Request failed: %s %s - %s", method, path, e)
             raise
 
     # --- Market Data ---
@@ -144,7 +150,7 @@ class MEXCFuturesClient:
         Args:
             symbol: Trading pair (e.g., USDC_USDT)
             price: Order price (required for limit/post-only orders)
-            vol: Volume/quantity
+            vol: Volume in contracts
             side: 1=open long, 2=close short, 3=open short, 4=close long
             order_type: 1=limit, 2=post only (maker), 3=IOC, 4=FOK, 5=market
             open_type: 1=isolated, 2=cross
@@ -199,7 +205,7 @@ class MEXCFuturesClient:
         """Get details of a specific order."""
         return self._request(
             "GET",
-            "/api/v1/private/order/get/{order_id}".format(order_id=order_id),
+            f"/api/v1/private/order/get/{order_id}",
             signed=True,
         )
 
