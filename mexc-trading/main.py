@@ -56,13 +56,15 @@ def main():
     logger.info("=" * 60)
     logger.info("MEXC USDC/USDT Futures Trading Bot")
     logger.info("=" * 60)
-    logger.info("Symbol:    %s", Config.SYMBOL)
-    logger.info("Leverage:  %dx", Config.LEVERAGE)
-    logger.info("Amount:    %.2f USDT", Config.TRADE_AMOUNT_USDT)
-    logger.info("Threshold: %.4f", Config.PRICE_DEVIATION_THRESHOLD)
-    logger.info("Stop Loss: %.1f%%", Config.STOP_LOSS_PERCENT)
+    logger.info("Symbol:      %s", Config.SYMBOL)
+    logger.info("Leverage:    %dx", Config.LEVERAGE)
+    logger.info("Amount:      %.2f USDT", Config.TRADE_AMOUNT_USDT)
+    logger.info("Threshold:   %.5f", Config.PRICE_DEVIATION_THRESHOLD)
+    logger.info("Stop Loss:   %.1f%%", Config.STOP_LOSS_PERCENT)
     logger.info("Take Profit: %.1f%%", Config.TAKE_PROFIT_PERCENT)
-    logger.info("Interval:  %ds", Config.CHECK_INTERVAL_SECONDS)
+    logger.info("Order Type:  %s (0%% maker fee)", Config.ORDER_TYPE)
+    logger.info("Order Expiry: %ds", Config.ORDER_EXPIRY_SECONDS)
+    logger.info("Interval:    %ds", Config.CHECK_INTERVAL_SECONDS)
     logger.info("=" * 60)
 
     # Initialize components
@@ -97,12 +99,20 @@ def main():
             logger.error("Unexpected error in main loop: %s", e, exc_info=True)
             time.sleep(30)  # Wait before retrying on error
 
-    # Graceful shutdown - close any open position
+    # Graceful shutdown - cancel pending orders and close positions
+    if strategy.pending_order is not None:
+        logger.info("Cancelling pending order before shutdown...")
+        try:
+            strategy.client.cancel_all_orders(strategy.symbol)
+        except Exception:
+            pass
+        strategy.pending_order = None
+
     if strategy.current_position is not None:
         logger.info("Closing open position before shutdown...")
         price = strategy.get_current_price()
         if price:
-            strategy.close_position(price)
+            strategy._emergency_close(price)
 
     logger.info("Trading bot stopped.")
 

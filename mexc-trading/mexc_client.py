@@ -79,7 +79,7 @@ class MEXCFuturesClient:
     def get_depth(self, symbol: str, limit: int = 20) -> dict:
         """Get order book depth."""
         return self._request(
-            "GET", "/api/v1/contract/depth/{symbol}".format(symbol=symbol),
+            "GET", f"/api/v1/contract/depth/{symbol}",
             {"limit": limit},
         )
 
@@ -143,10 +143,10 @@ class MEXCFuturesClient:
 
         Args:
             symbol: Trading pair (e.g., USDC_USDT)
-            price: Order price (0 for market orders)
+            price: Order price (required for limit/post-only orders)
             vol: Volume/quantity
             side: 1=open long, 2=close short, 3=open short, 4=close long
-            order_type: 1=limit price, 2=post only(maker), 3=IOC, 4=FOK, 5=market
+            order_type: 1=limit, 2=post only (maker), 3=IOC, 4=FOK, 5=market
             open_type: 1=isolated, 2=cross
             leverage: Leverage multiplier
             stop_loss_price: Stop loss trigger price
@@ -178,11 +178,28 @@ class MEXCFuturesClient:
             signed=True,
         )
 
+    def cancel_all_orders(self, symbol: str) -> dict:
+        """Cancel all open orders for a symbol."""
+        return self._request(
+            "POST",
+            "/api/v1/private/order/cancel_all",
+            {"symbol": symbol},
+            signed=True,
+        )
+
     def get_open_orders(self, symbol: str) -> dict:
         """Get all open orders for a symbol."""
         return self._request(
             "GET",
-            "/api/v1/private/order/list/open_orders/{symbol}".format(symbol=symbol),
+            f"/api/v1/private/order/list/open_orders/{symbol}",
+            signed=True,
+        )
+
+    def get_order_detail(self, symbol: str, order_id: str) -> dict:
+        """Get details of a specific order."""
+        return self._request(
+            "GET",
+            "/api/v1/private/order/get/{order_id}".format(order_id=order_id),
             signed=True,
         )
 
@@ -195,46 +212,62 @@ class MEXCFuturesClient:
             signed=True,
         )
 
-    # --- Market Order Helpers ---
+    # --- Limit Order Helpers (Post-Only / Maker) ---
 
-    def open_long(self, symbol: str, vol: float, leverage: int) -> dict:
-        """Open a long position with market order."""
+    def open_long_limit(self, symbol: str, price: float, vol: float, leverage: int) -> dict:
+        """Open long with post-only limit order (maker fee = 0%)."""
         return self.place_order(
-            symbol=symbol,
-            price=0,
-            vol=vol,
-            side=1,
-            order_type=5,
-            leverage=leverage,
+            symbol=symbol, price=price, vol=vol,
+            side=1, order_type=2, leverage=leverage,
         )
 
-    def open_short(self, symbol: str, vol: float, leverage: int) -> dict:
-        """Open a short position with market order."""
+    def open_short_limit(self, symbol: str, price: float, vol: float, leverage: int) -> dict:
+        """Open short with post-only limit order (maker fee = 0%)."""
         return self.place_order(
-            symbol=symbol,
-            price=0,
-            vol=vol,
-            side=3,
-            order_type=5,
-            leverage=leverage,
+            symbol=symbol, price=price, vol=vol,
+            side=3, order_type=2, leverage=leverage,
         )
 
-    def close_long(self, symbol: str, vol: float) -> dict:
-        """Close a long position with market order."""
+    def close_long_limit(self, symbol: str, price: float, vol: float) -> dict:
+        """Close long with post-only limit order (maker fee = 0%)."""
         return self.place_order(
-            symbol=symbol,
-            price=0,
-            vol=vol,
-            side=4,
-            order_type=5,
+            symbol=symbol, price=price, vol=vol,
+            side=4, order_type=2,
         )
 
-    def close_short(self, symbol: str, vol: float) -> dict:
-        """Close a short position with market order."""
+    def close_short_limit(self, symbol: str, price: float, vol: float) -> dict:
+        """Close short with post-only limit order (maker fee = 0%)."""
         return self.place_order(
-            symbol=symbol,
-            price=0,
-            vol=vol,
-            side=2,
-            order_type=5,
+            symbol=symbol, price=price, vol=vol,
+            side=2, order_type=2,
+        )
+
+    # --- Market Order Helpers (Taker, fallback) ---
+
+    def open_long_market(self, symbol: str, vol: float, leverage: int) -> dict:
+        """Open long with market order (taker fee applies)."""
+        return self.place_order(
+            symbol=symbol, price=0, vol=vol,
+            side=1, order_type=5, leverage=leverage,
+        )
+
+    def open_short_market(self, symbol: str, vol: float, leverage: int) -> dict:
+        """Open short with market order (taker fee applies)."""
+        return self.place_order(
+            symbol=symbol, price=0, vol=vol,
+            side=3, order_type=5, leverage=leverage,
+        )
+
+    def close_long_market(self, symbol: str, vol: float) -> dict:
+        """Close long with market order (taker fee applies)."""
+        return self.place_order(
+            symbol=symbol, price=0, vol=vol,
+            side=4, order_type=5,
+        )
+
+    def close_short_market(self, symbol: str, vol: float) -> dict:
+        """Close short with market order (taker fee applies)."""
+        return self.place_order(
+            symbol=symbol, price=0, vol=vol,
+            side=2, order_type=5,
         )

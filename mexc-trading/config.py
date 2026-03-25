@@ -13,7 +13,7 @@ class Config:
     SPOT_BASE_URL: str = "https://api.mexc.com"
 
     # Trading parameters
-    LEVERAGE: int = int(os.getenv("LEVERAGE", "10"))
+    LEVERAGE: int = int(os.getenv("LEVERAGE", "200"))
     TRADE_AMOUNT_USDT: float = float(os.getenv("TRADE_AMOUNT_USDT", "100"))
     MAX_POSITION_SIZE: float = float(os.getenv("MAX_POSITION_SIZE", "1000"))
 
@@ -23,9 +23,13 @@ class Config:
 
     # Strategy
     PRICE_DEVIATION_THRESHOLD: float = float(
-        os.getenv("PRICE_DEVIATION_THRESHOLD", "0.002")
+        os.getenv("PRICE_DEVIATION_THRESHOLD", "0.00005")
     )
-    CHECK_INTERVAL_SECONDS: int = int(os.getenv("CHECK_INTERVAL_SECONDS", "10"))
+    CHECK_INTERVAL_SECONDS: int = int(os.getenv("CHECK_INTERVAL_SECONDS", "5"))
+
+    # Order settings
+    ORDER_TYPE: str = os.getenv("ORDER_TYPE", "maker")  # "maker" or "taker"
+    ORDER_EXPIRY_SECONDS: int = int(os.getenv("ORDER_EXPIRY_SECONDS", "30"))
 
     # Trading pair
     SYMBOL: str = "USDC_USDT"
